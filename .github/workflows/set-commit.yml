@@ -1,0 +1,127 @@
+name: Set Last Seen Commit Cache
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit_sha:
+        description: "Commit SHA to set as last seen (leave empty to use latest)"
+        required: false
+        type: string
+      use_latest:
+        description: "Set to latest commit from upstream"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  set-cache:
+    runs-on: ubuntu-latest
+    env:
+      # NEED TO BE CONFIGURED EACH PROJECT
+      UPSTREAM_REPO: "golemfactory/goth"
+      BRANCH: "master"
+      CACHE_DIR: ".continuous-analysis-cache"
+      CACHE_FILE: ".continuous-analysis-cache/last_sha.txt"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: Prepare and restore cache folder
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.CACHE_DIR }}
+          key: continuous-analysis-cache-${{ github.repository }}-
+
+      - name: Create cache folder if not exists
+        run: |
+          mkdir -p "$CACHE_DIR"
+
+      - name: Get latest commit from upstream
+        if: ${{ inputs.use_latest == true }}
+        id: latest-commit
+        run: |
+          echo "Fetching latest commit from $UPSTREAM_REPO@$BRANCH..."
+          
+          latest_sha=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            "https://api.github.com/repos/$UPSTREAM_REPO/commits/$BRANCH" | \
+            jq -r '.sha')
+          
+          if [[ -z "$latest_sha" || "$latest_sha" == "null" ]]; then
+            echo "Error: Could not fetch latest commit from $UPSTREAM_REPO@$BRANCH"
+            exit 1
+          fi
+          
+          echo "Latest commit SHA: $latest_sha"
+          echo "commit_sha=$latest_sha" >> $GITHUB_OUTPUT
+
+      - name: Validate commit SHA
+        if: ${{ inputs.commit_sha != '' || inputs.use_latest == true }}
+        run: |
+          if [[ "${{ inputs.use_latest }}" == "true" ]]; then
+            COMMIT_SHA="${{ steps.latest-commit.outputs.commit_sha }}"
+          else
+            COMMIT_SHA="${{ inputs.commit_sha }}"
+          fi
+          
+          echo "Validating commit $COMMIT_SHA exists in $UPSTREAM_REPO..."
+          
+          # Basic SHA validation
+          if [[ ! "$COMMIT_SHA" =~ ^[a-f0-9]{7,40}$ ]]; then
+            echo "Error: Invalid commit SHA format: $COMMIT_SHA"
+            echo "Expected format: 7-40 hexadecimal characters"
+            exit 1
+          fi
+          
+          # Verify commit exists in upstream repo
+          if ! curl -s -f -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            "https://api.github.com/repos/$UPSTREAM_REPO/commits/$COMMIT_SHA" > /dev/null; then
+            echo "Error: Commit $COMMIT_SHA not found in $UPSTREAM_REPO"
+            exit 1
+          fi
+          
+          echo "Commit validation successful"
+          echo "COMMIT_SHA=$COMMIT_SHA" >> $GITHUB_ENV
+
+      - name: Set last seen commit to latest
+        if: ${{ inputs.use_latest == true }}
+        run: |
+          echo "${{ steps.latest-commit.outputs.commit_sha }}" > "$CACHE_FILE"
+          echo "Successfully set last seen commit SHA to: ${{ steps.latest-commit.outputs.commit_sha }}"
+
+      - name: Set last seen commit to specific SHA
+        if: ${{ inputs.commit_sha != '' && inputs.use_latest != true }}
+        run: |
+          echo "${{ inputs.commit_sha }}" > "$CACHE_FILE"
+          echo "Successfully set last seen commit SHA to: ${{ inputs.commit_sha }}"
+
+      - name: Show current cached commit
+        if: ${{ inputs.commit_sha == '' && inputs.use_latest != true }}
+        run: |
+          if [[ -f "$CACHE_FILE" ]]; then
+            current_sha=$(cat "$CACHE_FILE")
+            echo "Current cached commit SHA: $current_sha"
+          else
+            echo "No cached commit SHA found (file does not exist: $CACHE_FILE)"
+          fi
+
+      - name: Generate timestamp
+        if: ${{ inputs.commit_sha != '' || inputs.use_latest == true }}
+        id: timestamp
+        run: |
+          ts=$(date +'%Y%m%d-%H%M')
+          echo "ts=$ts" >> "$GITHUB_OUTPUT"
+          echo "Generated timestamp: $ts"
+
+      - name: Save updated SHA cache with timestamp
+        if: ${{ inputs.commit_sha != '' || inputs.use_latest == true }}
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.CACHE_DIR }}
+          key: continuous-analysis-cache-${{ github.repository }}-${{ steps.timestamp.outputs.ts }}
