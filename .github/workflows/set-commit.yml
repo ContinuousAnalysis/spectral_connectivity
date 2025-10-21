@@ -61,33 +61,6 @@ jobs:
           echo "Latest commit SHA: $latest_sha"
           echo "commit_sha=$latest_sha" >> $GITHUB_OUTPUT
 
-      - name: Validate commit SHA
-        if: ${{ inputs.commit_sha != '' || inputs.use_latest == true }}
-        run: |
-          if [[ "${{ inputs.use_latest }}" == "true" ]]; then
-            COMMIT_SHA="${{ steps.latest-commit.outputs.commit_sha }}"
-          else
-            COMMIT_SHA="${{ inputs.commit_sha }}"
-          fi
-          
-          echo "Validating commit $COMMIT_SHA exists in $UPSTREAM_REPO..."
-          
-          # Basic SHA validation
-          if [[ ! "$COMMIT_SHA" =~ ^[a-f0-9]{7,40}$ ]]; then
-            echo "Error: Invalid commit SHA format: $COMMIT_SHA"
-            echo "Expected format: 7-40 hexadecimal characters"
-            exit 1
-          fi
-          
-          # Verify commit exists in upstream repo
-          if ! curl -s -f -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-            "https://api.github.com/repos/$UPSTREAM_REPO/commits/$COMMIT_SHA" > /dev/null; then
-            echo "Error: Commit $COMMIT_SHA not found in $UPSTREAM_REPO"
-            exit 1
-          fi
-          
-          echo "Commit validation successful"
-          echo "COMMIT_SHA=$COMMIT_SHA" >> $GITHUB_ENV
 
       - name: Set last seen commit to latest
         if: ${{ inputs.use_latest == true }}
